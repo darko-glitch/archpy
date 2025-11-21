@@ -1,9 +1,8 @@
-# Edit this settings before install
+# Artix Linux Installation Configuration
+# Passwords will be entered securely during installation
+
 accounts:
-  root-password: root
   username: alessandro
-  password: password
-  crypt-password: password
 
 settings:
   clock: ntpd
@@ -37,10 +36,10 @@ packages:
   - snapper
   - snap-pac
   - grub
-  - efibootmgr
   - os-prober
   - grub-btrfs
   - python-yaml
+  - sudo
 
 services:
   - ufw 
@@ -51,7 +50,6 @@ services:
 partitions:
   efi: /dev/sda1
   linux: /dev/sda2
-
 
 boot:
   efi-directory: /boot/efi

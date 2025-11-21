@@ -4,6 +4,7 @@
 from modules import parse_arguments, loadYamlFromFile
 import subprocess
 import os
+import sys
 import getpass
 
 class colors:
@@ -19,8 +20,8 @@ class colors:
 
 class STATUS:
     PROGRESS = '[. ]'
-    OK = f'{colors.OKGREEN}\u2714{colors.ENDC}'
-    ERROR = f'{colors.FAIL}\u2718{colors.ENDC}'
+    OK = f'{colors.OKGREEN}✔{colors.ENDC}'
+    ERROR = f'{colors.FAIL}✘{colors.ENDC}'
 
 class Executor:
     ULTRALOG = False
@@ -32,32 +33,39 @@ class Executor:
             os.system(command)
             return 0
         elif Executor.LOGERROR:
-            process = subprocess.Popen(
-                command, shell=True, stdout=subprocess.PIPE)
-            process.wait()
-            
             process = subprocess.run(
-                command, shell=True, stdout=subprocess.PIPE)
+                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if process.returncode != 0:
+                print(f"\nError output: {process.stderr.decode()}", file=sys.stderr)
             return process.returncode
         else:
-            process = subprocess.Popen(
-                command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            process.wait()
-            
             process = subprocess.run(
                 command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             return process.returncode
 
 def execute(command: str, description: str):
+    # Get terminal width, default to 80 if unavailable
+    try:
+        terminal_width = os.get_terminal_size().columns
+    except:
+        terminal_width = 80
+    
     message = f'{STATUS.PROGRESS} {description}'
-    print(message, end='\r', flush=True)
+    # Pad message to clear any previous text
+    padded_message = message.ljust(terminal_width)
+    print(padded_message, end='\r', flush=True)
+    
     returncode = Executor.execute(command)
+    
     if returncode == 0:
         message = f'{STATUS.OK} {description}'
-        print(f'\r{message}')
+        padded_message = message.ljust(terminal_width)
+        print(padded_message)
     else:
         message = f'{STATUS.ERROR} {description}'
-        print(f'\r{message}')
+        padded_message = message.ljust(terminal_width)
+        print(padded_message)
+    
     return returncode
 
 def execute_chroot(command: str, description: str):
@@ -66,50 +74,56 @@ def execute_chroot(command: str, description: str):
     return execute(chroot_command, description)
 
 def setKeyMap(keymap: str):
-    description = f'Settings keymap to {keymap}'
+    description = f'Setting keymap to {keymap}'
     command = f'loadkeys {keymap}'
-    execute(command, description)
+    return execute(command, description)
 
 def cryptPartition(linux_partition: str, password: str = None):
-    description = f'Crypting Partition.'
+    description = 'Encrypting partition with LUKS'
     if password:
         command = f'echo -n "{password}" | cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 8589934592 --pbkdf-parallel 4 --pbkdf-time 4 {linux_partition} -'
     else:
         command = f'cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 8589934592 --pbkdf-parallel 4 --pbkdf-time 4 {linux_partition}'
-    execute(command, description)
+    return execute(command, description)
 
 def cryptOpen(linux_partition: str, password: str = None):
-    description = f'Opening encrypted partition.'
+    description = 'Opening encrypted partition'
     if password:
         command = f'echo -n "{password}" | cryptsetup open {linux_partition} cryptroot -'
     else:
         command = f'cryptsetup open {linux_partition} cryptroot'
-    execute(command, description)
+    return execute(command, description)
 
 def formatBtrfs(crypted_root_device: str):
     description = f'Formatting {crypted_root_device} with Btrfs'
-    command = f'mkfs.btrfs {crypted_root_device}'
-    execute(command, description)
+    command = f'mkfs.btrfs -f {crypted_root_device}'
+    return execute(command, description)
 
 def creatingSubvol():
     subvolumes = ['@', '@home', '@var', '@tmp', '@snapshots']
     for subvol in subvolumes:
         description = f'Creating Btrfs subvolume {subvol}'
         command = f'btrfs subvolume create /mnt/{subvol}'
-        execute(command, description)
+        returncode = execute(command, description)
+        if returncode != 0:
+            return returncode
 
     description = 'Unmounting temporary mount'
     command = 'umount /mnt'
-    execute(command, description)
+    return execute(command, description)
 
 def mountBtrfsSubvolumes(crypted_root_device: str):
-    description = f'Mounting Btrfs subvolume @ to /mnt with compress=zstd'
+    description = f'Mounting Btrfs subvolume @ to /mnt'
     command = f'mount -o compress=zstd,subvol=@ {crypted_root_device} /mnt'
-    execute(command, description)
+    returncode = execute(command, description)
+    if returncode != 0:
+        return returncode
 
     description = 'Creating mount points for subvolumes'
     command = 'mkdir -p /mnt/{home,var,tmp,.snapshots,boot}'
-    execute(command, description)
+    returncode = execute(command, description)
+    if returncode != 0:
+        return returncode
 
     subvolumes = ['@home', '@var', '@tmp', '@snapshots']
     mountpoints = ['home', 'var', 'tmp', '.snapshots']
@@ -117,119 +131,127 @@ def mountBtrfsSubvolumes(crypted_root_device: str):
     for subvol, mnt in zip(subvolumes, mountpoints):
         description = f'Mounting Btrfs subvolume {subvol} to /mnt/{mnt}'
         command = f'mount -o compress=zstd,subvol={subvol} {crypted_root_device} /mnt/{mnt}'
-        execute(command, description)
+        returncode = execute(command, description)
+        if returncode != 0:
+            return returncode
+    
+    return 0
 
 def installPackage(package: str):
     description = f'Installing {package}'
     command = f'basestrap /mnt {package} --noconfirm'
-    execute(command, description)
+    return execute(command, description)
 
 def serviceEnable(service: str):
     description = f'Enabling OpenRC service {service}'
     command = f'rc-update add {service} default'
-    execute_chroot(command, description)
-
-def mountLinuxPartition(crypted_root_device: str):
-    description = f'Mounting {crypted_root_device} to /mnt'
-    command = f"mount {crypted_root_device} /mnt"
-    execute(command, description)
+    return execute_chroot(command, description)
 
 def mountEfiPartition(efi_partition: str, path: str):
-    description = f'Mounting Efi Partition from {efi_partition} to {path}'
-    command = f'mkdir -p /mnt{path}; mount {efi_partition} /mnt{path}'
-    execute(command, description)
+    description = f'Mounting EFI partition to {path}'
+    command = f'mkdir -p /mnt{path} && mount {efi_partition} /mnt{path}'
+    return execute(command, description)
 
 def generateFstab():
     description = 'Generating fstab'
     command = 'fstabgen -U /mnt >> /mnt/etc/fstab'
-    execute(command, description)
+    return execute(command, description)
 
 def copyInstallerInMNT():
     description = 'Copying installer to /mnt'
-    command = 'cp -r ../archinstaller /mnt'
-    execute(command, description)
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(script_dir)
+    command = f'cp -r {parent_dir}/archpy /mnt/'
+    return execute(command, description)
 
-def chrootAndExecute(config_path: str = '/archinstaller/config.yml', installer_path: str = '/archinstaller/installer.py'):
-    description = 'Running chroot'
-    command = f'arch-chroot /mnt {installer_path} {config_path} --chroot' + \
-        (' --logerror' if Executor.LOGERROR else '')
-    os.system(command)
+def chrootAndExecute(config_path: str = '/archpy/config.yml', installer_path: str = '/archpy/installer.py'):
+    description = 'Running chroot installation'
+    command = f'arch-chroot /mnt python3 {installer_path} {config_path} --chroot' + \
+        (' --logerror' if Executor.LOGERROR else '') + \
+        (' --ultralog' if Executor.ULTRALOG else '')
+    returncode = os.system(command)
+    return returncode
 
 def linkTime(region: str, location: str):
     description = f'Linking time to {region}/{location}'
     command = f'ln -sf /usr/share/zoneinfo/{region}/{location} /etc/localtime'
-    execute(command, description)
+    return execute(command, description)
 
 def setHwClock():
-    description = 'Setting hwclock'
+    description = 'Setting hardware clock'
     command = 'hwclock --systohc'
-    execute(command, description)
+    return execute(command, description)
 
 def addLocale(locale: str):
     description = f'Adding locale {locale}'
-    command = f'echo {locale} >> /etc/locale.gen; locale-gen'
-    execute(command, description)
+    command = f'echo "{locale}" >> /etc/locale.gen && locale-gen'
+    return execute(command, description)
 
 def addLang(lang: str):
-    description = f'Adding lang {lang}'
-    command = f'echo "LANG={lang}" >> /etc/locale.conf'
-    execute(command, description)
+    description = f'Setting system language to {lang}'
+    command = f'echo "LANG={lang}" > /etc/locale.conf'
+    return execute(command, description)
 
 def addHostname(hostname: str):
-    description = f'Adding hostname {hostname}'
+    description = f'Setting hostname to {hostname}'
     command = f'echo "{hostname}" > /etc/hostname'
-    execute(command, description)
+    return execute(command, description)
 
 def setupHosts(hostname: str = 'artix'):
-    description = 'Setting up hosts'
-    command = f'echo "127.0.0.1 localhost\n127.0.1.1 {hostname}.localdomain {hostname}" > /etc/hosts'
-    execute(command, description)
+    description = 'Configuring /etc/hosts'
+    command = f'echo -e "127.0.0.1\\tlocalhost\\n127.0.1.1\\t{hostname}.localdomain\\t{hostname}" > /etc/hosts'
+    return execute(command, description)
 
 def createUser(username: str, password: str):
     description = f'Creating user {username}'
-    command = f'useradd -m -G wheel,storage,power,audio,video "{username}"; echo -e "{password}\n{password}" | passwd {username}'
-    execute(command, description)
+    command = f'useradd -m -G wheel,storage,power,audio,video "{username}" && echo "{username}:{password}" | chpasswd'
+    return execute(command, description)
 
 def addWheelToSudoers():
     description = 'Adding wheel group to sudoers'
-    command = 'echo "%wheel ALL=(ALL) ALL" | EDITOR="tee -a" visudo'
-    execute(command, description)
+    command = 'echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers'
+    return execute(command, description)
 
 def setMkinitcpioHooks():
-    description = 'Setting mkinitcpio HOOKS for LUKS'
-    command = "sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)/' /etc/mkinitcpio.conf"
-    execute(command, description)
+    description = 'Configuring mkinitcpio for LUKS'
+    command = "sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)/' /etc/mkinitcpio.conf"
+    return execute(command, description)
 
 def mkinit():
-    description = 'Running mkinitcpio'
+    description = 'Generating initial ramdisk'
     command = 'mkinitcpio -P'
-    execute(command, description)
+    return execute(command, description)
 
 def grubConfig(linux_partition: str, crypted_root_device: str):
-    description = 'Setting GRUB_CMDLINE_LINUX_DEFAULT for LUKS'
+    description = 'Configuring GRUB for encrypted root'
     
     # Get UUIDs
     linux_uuid = get_disk_uuid(linux_partition)
     crypted_uuid = get_disk_uuid(crypted_root_device)
     
+    if not linux_uuid or not crypted_uuid:
+        print(f'{STATUS.ERROR} Failed to get disk UUIDs')
+        return 1
+    
     command = (
         f'sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|'
-        f'GRUB_CMDLINE_LINUX_DEFAULT=\\"loglevel=3 rhgb quiet mitigations=off '
+        f'GRUB_CMDLINE_LINUX_DEFAULT=\\"loglevel=3 quiet '
         f'cryptdevice=UUID={linux_uuid}:cryptroot root=UUID={crypted_uuid}\\"|" '
         f'/etc/default/grub'
     )
     
-    execute(command, description)
+    return execute(command, description)
 
 def grubInstall(target, efi_directory, bootloader_id):
-    description = f'Installing GRUB to {target}'
+    description = f'Installing GRUB bootloader'
     command = f'grub-install --target={target} --efi-directory={efi_directory} --bootloader-id={bootloader_id} --recheck'
-    execute(command, description)
+    return execute(command, description)
 
 def mkconfig():
-    description = 'Generating GRUB config'
+    description = 'Generating GRUB configuration'
     command = 'grub-mkconfig -o /boot/grub/grub.cfg'
-    execute(command, description)
+    return execute(command, description)
 
 def get_disk_uuid(disk: str):
     """Get UUID of a disk/partition"""
@@ -241,18 +263,42 @@ def get_disk_uuid(disk: str):
             check=True
         )
         return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f'{STATUS.ERROR} Failed to get UUID for {disk}')
+    except subprocess.CalledProcessError:
         return None
 
-def setPasswForRoot(password: str):
-    description = f'Setting root password to {password}'
-    command = f'echo -e "{password}\n{password}" | passwd root'
-    execute(command, description)
+def setPasswdForRoot(password: str):
+    description = 'Setting root password'
+    command = f'echo "root:{password}" | chpasswd'
+    return execute(command, description)
+
+def setVconsoleKeymap(keymap: str):
+    description = 'Configuring console keymap'
+    command = f'echo "KEYMAP={keymap}" > /etc/vconsole.conf'
+    return execute(command, description)
+
+def get_secure_password(prompt: str, min_length: int = 6):
+    """Get password securely with confirmation"""
+    while True:
+        try:
+            password = getpass.getpass(f"{prompt}: ")
+            if len(password) < min_length:
+                print(f'{colors.WARNING}Password must be at least {min_length} characters!{colors.ENDC}')
+                continue
+            
+            confirm = getpass.getpass("Confirm password: ")
+            if password != confirm:
+                print(f'{colors.WARNING}Passwords do not match! Try again.{colors.ENDC}')
+                continue
+            
+            return password
+        except (KeyboardInterrupt, EOFError):
+            print(f'\n{colors.FAIL}Password input cancelled{colors.ENDC}')
+            sys.exit(1)
 
 def reboot():
-    print("\n\nInstallation completed!!\n\n")
-    input("Press enter to reboot")
+    print("\n" + colors.OKGREEN + colors.BOLD + "Installation completed successfully!" + colors.ENDC)
+    print("\nImportant: Remove installation media before rebooting")
+    response = input("\nPress Enter to reboot or Ctrl+C to exit: ")
     os.system('reboot')
 
 def archiso(data):
@@ -261,73 +307,99 @@ def archiso(data):
     settings = data['settings']
     packages = data['packages']
 
+    print(f"\n{colors.HEADER}{colors.BOLD}=== Artix Linux Installation ==={colors.ENDC}\n")
+
     # Set keymap
     keymap = settings['keymap']
-    setKeyMap(keymap)
+    if setKeyMap(keymap) != 0:
+        print(f'{colors.FAIL}Failed to set keymap. Continuing...{colors.ENDC}')
 
-    # Crypt root partition - use getpass for security
+    # Get LUKS encryption password
     linux_partition = partitions['linux']
-    print("\n" + colors.BOLD + "LUKS Encryption Setup" + colors.ENDC)
-    cryptpassword = getpass.getpass("Enter password for LUKS encryption: ")
-    cryptpassword_confirm = getpass.getpass("Confirm password: ")
+    print(f"\n{colors.BOLD}LUKS Encryption Setup{colors.ENDC}")
+    print(f"Partition: {linux_partition}")
+    cryptpassword = get_secure_password("Enter password for LUKS encryption", min_length=8)
     
-    if cryptpassword != cryptpassword_confirm:
-        print(f'{STATUS.ERROR} Passwords do not match!')
-        exit(1)
+    # Encrypt and open partition
+    if cryptPartition(linux_partition, cryptpassword) != 0:
+        print(f'{colors.FAIL}Failed to encrypt partition!{colors.ENDC}')
+        sys.exit(1)
     
-    if len(cryptpassword) < 8:
-        print(f'{STATUS.ERROR} Password must be at least 8 characters!')
-        exit(1)
-    
-    cryptPartition(linux_partition, cryptpassword)
-    cryptOpen(linux_partition, cryptpassword)
+    if cryptOpen(linux_partition, cryptpassword) != 0:
+        print(f'{colors.FAIL}Failed to open encrypted partition!{colors.ENDC}')
+        sys.exit(1)
 
-    # Configure Btrfs 
+    # Configure Btrfs
     crypted_root_device = "/dev/mapper/cryptroot"
-    formatBtrfs(crypted_root_device)
+    
+    if formatBtrfs(crypted_root_device) != 0:
+        print(f'{colors.FAIL}Failed to format Btrfs!{colors.ENDC}')
+        sys.exit(1)
     
     # Mount temporarily to create subvolumes
-    execute(f'mount {crypted_root_device} /mnt', 'Mounting temporarily for subvolume creation')
-    creatingSubvol()
+    if execute(f'mount {crypted_root_device} /mnt', 'Mounting for subvolume creation') != 0:
+        print(f'{colors.FAIL}Failed to mount partition!{colors.ENDC}')
+        sys.exit(1)
     
-    # Mount with proper subvolume options
-    mountBtrfsSubvolumes(crypted_root_device)
+    if creatingSubvol() != 0:
+        print(f'{colors.FAIL}Failed to create subvolumes!{colors.ENDC}')
+        sys.exit(1)
+    
+    if mountBtrfsSubvolumes(crypted_root_device) != 0:
+        print(f'{colors.FAIL}Failed to mount Btrfs subvolumes!{colors.ENDC}')
+        sys.exit(1)
 
-    # Mounting efi partition
+    # Mount EFI partition
     efi_partition = partitions['efi']
     efi_directory = boot['efi-directory']
-    mountEfiPartition(efi_partition, efi_directory)
+    if mountEfiPartition(efi_partition, efi_directory) != 0:
+        print(f'{colors.FAIL}Failed to mount EFI partition!{colors.ENDC}')
+        sys.exit(1)
 
-    # Installing packages
+    # Install packages
+    print(f"\n{colors.BOLD}Installing packages...{colors.ENDC}")
+    failed_packages = []
     for package in packages:
-        installPackage(package)
+        if installPackage(package) != 0:
+            failed_packages.append(package)
+    
+    if failed_packages:
+        print(f'{colors.WARNING}Warning: Failed to install: {", ".join(failed_packages)}{colors.ENDC}')
 
     # Generate fstab
-    generateFstab()
+    if generateFstab() != 0:
+        print(f'{colors.FAIL}Failed to generate fstab!{colors.ENDC}')
+        sys.exit(1)
 
-    # Copying installer to /mnt
-    copyInstallerInMNT()
+    # Copy installer to /mnt
+    if copyInstallerInMNT() != 0:
+        print(f'{colors.FAIL}Failed to copy installer!{colors.ENDC}')
+        sys.exit(1)
 
     # Chroot and execute
-    chrootAndExecute()
+    print(f"\n{colors.BOLD}Entering chroot environment...{colors.ENDC}\n")
+    if chrootAndExecute() != 0:
+        print(f'{colors.FAIL}Chroot installation failed!{colors.ENDC}')
+        sys.exit(1)
 
-    # Rebooting
+    # Reboot
     reboot()
 
 def chroot(data):
     partitions = data['partitions']
     boot = data['boot']
     settings = data['settings']
-    packages = data['packages']
-    accounts = data['accounts']
     services = data.get('services', [])
+    accounts = data['accounts']
+
+    print(f"\n{colors.HEADER}{colors.BOLD}=== Chroot Configuration ==={colors.ENDC}\n")
 
     # Link time
     region = settings['region']
     location = settings['location']
     linkTime(region, location)
 
-    # Set hwclock
+    # Set hardware clock
     setHwClock()
 
     # Add locale
@@ -345,16 +417,14 @@ def chroot(data):
     # Setup hosts
     setupHosts(hostname)
 
-    # Set keymap persistence
+    # Set vconsole keymap for persistence
     keymap = settings['keymap']
-    description = f'Setting vconsole keymap to {keymap}'
-    command = f'echo "KEYMAP={keymap}" > /etc/vconsole.conf'
-    execute(command, description)
+    setVconsoleKeymap(keymap)
 
     # Configure mkinitcpio BEFORE running it
     setMkinitcpioHooks()
     
-    # Run mkinitcpio
+    # Generate initramfs
     mkinit()
 
     # Configure GRUB for encrypted root
@@ -362,7 +432,7 @@ def chroot(data):
     crypted_root_device = "/dev/mapper/cryptroot"
     grubConfig(linux_partition, crypted_root_device)
 
-    # Grub install
+    # Install GRUB
     target = boot['target']
     efi_directory = boot['efi-directory']
     bootloader_id = boot['bootloader-id']
@@ -372,38 +442,49 @@ def chroot(data):
     mkconfig()
 
     # Set root password
-    password = accounts['root-password']
-    setPasswForRoot(password)
+    print(f"\n{colors.BOLD}Root Account Setup{colors.ENDC}")
+    root_password = get_secure_password("Enter password for root")
+    setPasswdForRoot(root_password)
 
     # Create user
     username = accounts['username']
-    password = accounts['password']
-    createUser(username, password)
+    print(f"\n{colors.BOLD}User Account Setup for '{username}'{colors.ENDC}")
+    user_password = get_secure_password(f"Enter password for user '{username}'")
+    createUser(username, user_password)
 
     # Add wheel to sudoers
     addWheelToSudoers()
 
     # Enable services
+    print(f"\n{colors.BOLD}Enabling services...{colors.ENDC}")
     for service in services:
         serviceEnable(service)
 
-    os.system('exit')
-    exit(0)
-
+    print(f"\n{colors.OKGREEN}{colors.BOLD}Chroot configuration completed!{colors.ENDC}\n")
 
 if __name__ == "__main__":
     args = parse_arguments()
     configurationFilePath = args.file
-    data = loadYamlFromFile(configurationFilePath)
+    
+    try:
+        data = loadYamlFromFile(configurationFilePath)
+    except Exception as e:
+        print(f'{colors.FAIL}Error loading configuration: {e}{colors.ENDC}')
+        sys.exit(1)
 
     if args.ultralog:
         Executor.ULTRALOG = True
     if args.logerror:
         Executor.LOGERROR = True
 
-    if args.chroot:
-        chroot(data)
-    else:
-        archiso(data)
-
-
+    try:
+        if args.chroot:
+            chroot(data)
+        else:
+            archiso(data)
+    except KeyboardInterrupt:
+        print(f'\n{colors.FAIL}Installation cancelled by user{colors.ENDC}')
+        sys.exit(1)
+    except Exception as e:
+        print(f'\n{colors.FAIL}Unexpected error: {e}{colors.ENDC}')
+        sys.exit(1)
