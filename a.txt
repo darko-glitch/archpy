@@ -1,0 +1,93 @@
+cryptsetup -v luksFormat /dev/sda2
+cryptsetup open /dev/sda2 cryptroot
+mkfs.ext4 /dev/mapper/cryptroot
+########
+mkfs.btrfs /dev/mapper/cryptroot
+
+mount /dev/mapper/cryptroot /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@var
+btrfs subvolume create /mnt/@tmp
+btrfs subvolume create /mnt/@snapshots
+umount /mnt
+
+mount -o compress=zstd,subvol=@ /dev/mapper/cryptroot /mnt
+mkdir -p /mnt/{home,var,tmp,.snapshots,boot}
+mount -o compress=zstd,subvol=@home /dev/mapper/cryptroot /mnt/home
+mount -o compress=zstd,subvol=@var /dev/mapper/cryptroot /mnt/var
+mount -o compress=zstd,subvol=@tmp /dev/mapper/cryptroot /mnt/tmp
+mount -o compress=zstd,subvol=@snapshots /dev/mapper/cryptroot /mnt/.snapshots
+########
+mount /dev/mapper/cryptroot /mnt
+mkdir /mnt/boot 
+mkfs.vfat /dev/sda1
+mount /dev/sda1 /mnt/boot
+
+basestrap /mnt base base-devel openrc elogind-openrc gummiboot
+basestrap /mnt linux linux-firmware sof-firmware nvim efibootmgr dhcpcd-openrc dhcpcd iwd iwd-openrc
+basestrap /mnt dosfstools btrfs-progs e2fsprogs cryptsetup cryptsetup-openrc intel-ucode
+
+fstabgen -U /mnt >> /mnt/etc/fstab 
+artix-chroot /mnt
+
+ln -sf /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+hwclock --systohc
+
+nvim /etc/locale.gen
+locale-gen
+
+echo 'LANG="en_US.UTF-8"' >> /etc/locale.conf
+sudo sed -i "s/hostname='localhost'/hostname='arch'/" /etc/conf.d/hostname
+echo arch >> /etc/hostname
+
+
+echo "127.0.1.1        arch.localdomain  arch" | sudo tee -a /etc/hosts
+passwd
+
+useradd -m -G wheel,storage,power,audio,video -s /bin/bash dark
+passwd dark
+sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+
+HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt filesystems fsck)
+
+mkinitcpio -p
+grub-install --efi-directory=/boot --bootloader-id=artix /dev/sda
+
+vim /etc/default/grub
+loglevel=3 rhgb quiet mitigations=off cryptdevice=UUID=LUKS_UUID_HERE:cryptroot root=UUID=ROOT_UUID_HERE
+
+sed -i "s|LUKS_UUID_HERE|$(blkid -o value -s UUID /dev/sda2)|" /etc/default/grub
+sed -i "s|ROOT_UUID_HERE|$(blkid -o value -s UUID /dev/mapper/cryptroot)|" /etc/default/grub
+
+grub-mkconfig -o /boot/grub/grub.cfg
+rc-update add NetworkManager default
+rc-update add elogind default
+
+
+
+sudo pacman -Syu --needed --noconfirm xorg xorg-xinit firefox git wget 
+
+cd ~/
+mkdir artix-dotfiles 
+cd artix-dotfiles
+git clone git://git.suckless.org/dwm dwm
+git clone git://git.suckless.org/st
+git clone git://git.suckless.org/dmenu
+
+cd dwm 
+sudo make clean install
+cd ../st 
+sudo make clean install 
+cd ../dmenu 
+sudo make clean install 
+cd ~/
+touch .xinitrc
+echo 'exec dwm' >> .xinitrc
+
+exit
+exit 
+lsblk
+umount -a 
+reboot
+

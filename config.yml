@@ -1,0 +1,59 @@
+# Edit this settings before install
+accounts:
+  root-password: root
+  username: alessandro
+  password: password
+  crypt-password: password
+
+settings:
+  clock: ntpd
+  keymap: it
+  locale: en_US.UTF-8 UTF-8
+  lang: en_US.UTF-8
+  region: Europe
+  location: Berlin
+  hostname: Matebook
+
+packages:
+  - base
+  - base-devel
+  - openrc
+  - elogind-openrc
+  - linux
+  - linux-firmware
+  - sof-firmware
+  - vim
+  - efibootmgr
+  - dhcpcd-openrc
+  - dhcpcd
+  - iwd
+  - iwd-openrc
+  - dosfstools
+  - btrfs-progs
+  - e2fsprogs
+  - cryptsetup
+  - cryptsetup-openrc
+  - intel-ucode
+  - snapper
+  - snap-pac
+  - grub
+  - efibootmgr
+  - os-prober
+  - grub-btrfs
+  - python-yaml
+
+services:
+  - ufw 
+  - elogind
+  - iwd
+
+# Do not touch the following settings if you have used the `format.sh` script for partitioning.
+partitions:
+  efi: /dev/sda1
+  linux: /dev/sda2
+
+
+boot:
+  efi-directory: /boot/efi
+  bootloader-id: grub
+  target: x86_64-efi
