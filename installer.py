@@ -147,7 +147,7 @@ def serviceEnable(service: str):
     command = f'rc-update add {service} default'
     return execute_chroot(command, description)
 
-def mountEfiPartition(efi_partition: str, path: str):
+def mountEfiPartition(efi_partition: str, path: str ="boot"):
     description = f'Mounting EFI partition to {path}'
     command = f'mkdir -p /mnt{path} && mount {efi_partition} /mnt{path}'
     return execute(command, description)
@@ -351,8 +351,8 @@ def archiso(data):
 
     # Mount EFI partition
     efi_partition = partitions['efi']
-    efi_directory = boot['efi-directory']
-    if mountEfiPartition(efi_partition, efi_directory) != 0:
+    path = "boot"
+    if mountEfiPartition(efi_partition, path) != 0:
         print(f'{colors.FAIL}Failed to mount EFI partition!{colors.ENDC}')
         sys.exit(1)
 
