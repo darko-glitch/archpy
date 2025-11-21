@@ -81,9 +81,9 @@ def setKeyMap(keymap: str):
 def cryptPartition(linux_partition: str, password: str = None):
     description = 'Encrypting partition with LUKS'
     if password:
-        command = f'echo -n "{password}" | cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 8589934592 --pbkdf-parallel 4 --pbkdf-time 4 {linux_partition} -'
+        command = f'echo -n "{password}" | cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 4194304 --pbkdf-parallel 4 --iter-time 4000 {linux_partition} -'
     else:
-        command = f'cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 8589934592 --pbkdf-parallel 4 --pbkdf-time 4 {linux_partition}'
+        command = f'cryptsetup luksFormat --batch-mode --type luks2 --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id --pbkdf-memory 4194304 --pbkdf-parallel 4 --iter-time 4000 {linux_partition}'
     return execute(command, description)
 
 def cryptOpen(linux_partition: str, password: str = None):
